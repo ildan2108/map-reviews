@@ -2,9 +2,8 @@
 
 namespace App\Exceptions;
 
-use Exception;
+use RuntimeException;
 
-class YandexMapsSourceException extends Exception
+class YandexMapsSourceException extends RuntimeException
 {
-    //
 }

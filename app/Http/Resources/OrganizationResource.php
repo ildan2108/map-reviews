@@ -17,6 +17,14 @@ class OrganizationResource extends JsonResource
         return [
             'id' => $this->id,
             'yandex_url' => $this->yandex_url,
+            'parsing_status' => $this->parsing_status,
+            'parsing_error' => $this->parsing_error,
+            'parsing_started_at' => $this->parsing_started_at?->toISOString(),
+            'parsed_at' => $this->parsed_at?->toISOString(),
+            'name' => $this->name,
+            'average_rating' => $this->average_rating,
+            'ratings_count' => $this->ratings_count,
+            'reviews_count' => $this->reviews_count,
         ];
     }
 }

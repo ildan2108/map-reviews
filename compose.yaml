@@ -12,6 +12,17 @@ services:
     volumes:
       - .:/var/www/html
 
+  queue:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    command: php artisan queue:work --tries=3 --timeout=120
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      database:
+        condition: service_healthy
+
   database:
     image: postgres:16
     environment:
