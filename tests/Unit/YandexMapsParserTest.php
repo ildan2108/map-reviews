@@ -65,4 +65,100 @@ class YandexMapsParserTest extends TestCase
 
         app(YandexMapsParser::class)->parse('https://yandex.ru/maps/search/coffee');
     }
+    public function test_parses_reviews_from_state_view(): void
+    {
+        Http::fake([
+            'yandex.ru/maps/org/*' => Http::response(
+                '<script type="application/json" class="state-view">'.json_encode([
+                    'reviewResults' => [
+                        'reviews' => [
+                            [
+                                'reviewId' => 'review-123',
+                                'author' => [
+                                    'name' => 'Islam G.',
+                                ],
+                                'rating' => 5,
+                                'text' => 'Отличное место!',
+                                'updatedTime' => '2026-07-13T06:08:59.779Z',
+                                'businessComment' => [
+                                    'text' => 'Спасибо за отзыв!',
+                                    'updatedTime' => '2026-07-13T07:52:48.741Z',
+                                ],
+                            ],
+                        ],
+                    ],
+                ], JSON_THROW_ON_ERROR).'</script>',
+                200,
+            ),
+        ]);
+
+        $result = app(YandexMapsParser::class)->parseReviews(
+            'https://yandex.ru/maps/org/coffee_shop/123456789/reviews/'
+        );
+
+        $this->assertSame([
+            [
+                'external_id' => 'review-123',
+                'author_name' => 'Islam G.',
+                'rating' => 5,
+                'text' => 'Отличное место!',
+                'published_at' => '2026-07-13T06:08:59.779Z',
+                'organization_reply' => 'Спасибо за отзыв!',
+                'organization_reply_at' => '2026-07-13T07:52:48.741Z',
+            ],
+        ], $result);
+    }
+    public function test_adds_page_parameter_to_reviews_url(): void
+    {
+        Http::fake([
+            'yandex.ru/maps/org/*' => Http::response(
+                '<script type="application/json" class="state-view">'.json_encode([
+                    'reviewResults' => [
+                        'reviews' => [],
+                    ],
+                ], JSON_THROW_ON_ERROR).'</script>',
+                200,
+            ),
+        ]);
+
+        app(YandexMapsParser::class)->parseReviews(
+            'https://yandex.ru/maps/org/coffee_shop/123456789/reviews/',
+            2
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            return $request->url() ===
+                'https://yandex.ru/maps/org/coffee_shop/123456789/reviews/?page=2';
+        });
+    }
+    public function test_parses_review_without_organization_reply(): void
+    {
+        Http::fake([
+            'yandex.ru/maps/org/*' => Http::response(
+                '<script type="application/json" class="state-view">'.json_encode([
+                    'reviewResults' => [
+                        'reviews' => [
+                            [
+                                'reviewId' => 'review-123',
+                                'author' => [
+                                    'name' => 'Islam G.',
+                                ],
+                                'rating' => 5,
+                                'text' => 'Отличное место!',
+                                'updatedTime' => '2026-07-13T06:08:59.779Z',
+                            ],
+                        ],
+                    ],
+                ], JSON_THROW_ON_ERROR).'</script>',
+                200,
+            ),
+        ]);
+
+        $result = app(YandexMapsParser::class)->parseReviews(
+            'https://yandex.ru/maps/org/coffee_shop/123456789/reviews/'
+        );
+
+        $this->assertNull($result[0]['organization_reply']);
+        $this->assertNull($result[0]['organization_reply_at']);
+    }
 }

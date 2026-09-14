@@ -149,4 +149,128 @@ class YandexMapsParser
 
         return (int) $value;
     }
+
+    /**
+     * @return array<int, array{
+     *     external_id: string,
+     *     author_name: string|null,
+     *     rating: int|null,
+     *     text: string|null,
+     *     published_at: string|null,
+     *     organization_reply: string|null,
+     *     organization_reply_at: string|null
+     * }>
+     */
+    public function parseReviews(string $url, int $page = 1): array
+    {
+        $page = max(1, $page);
+
+        $reviewsUrl = $this->buildReviewsUrl($url, $page);
+
+        $response = Http::withHeaders([
+            'Accept' => 'text/html,application/xhtml+xml',
+        ])
+            ->timeout(20)
+            ->retry(2, 500)
+            ->get($reviewsUrl);
+
+        if ($response->failed()) {
+            throw new YandexMapsSourceException(
+                'Не удалось получить отзывы Яндекс.Карт: источник недоступен.'
+            );
+        }
+
+        $html = $response->body();
+
+        if (trim($html) === '') {
+            throw new YandexMapsSourceException('Яндекс.Карты вернули пустой ответ.');
+        }
+
+        $state = $this->extractState($html);
+
+        if ($state === null) {
+            throw new YandexMapsSourceException(
+                'Не удалось распознать данные отзывов Яндекс.Карт: формат ответа изменился.'
+            );
+        }
+
+        $reviews = $state['reviewResults']['reviews'] ?? null;
+
+        if (! is_array($reviews)) {
+            throw new YandexMapsSourceException(
+                'Не удалось найти отзывы в ответе Яндекс.Карт.'
+            );
+        }
+
+        $result = [];
+
+        foreach ($reviews as $review) {
+            $normalizedReview = $this->normalizeReview($review);
+
+            if ($normalizedReview !== null) {
+                $result[] = $normalizedReview;
+            }
+        }
+
+        return $result;
+    }
+
+    private function buildReviewsUrl(string $url, int $page): string
+    {
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url . $separator . 'page=' . $page;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function extractState(string $html): ?array
+    {
+        if (! preg_match(
+            '/<script[^>]*class=["\']state-view["\'][^>]*>(.*?)<\/script>/isu',
+            $html,
+            $matches
+        )) {
+            return null;
+        }
+
+        $state = json_decode(trim($matches[1]), true);
+
+        return is_array($state) ? $state : null;
+    }
+
+    /**
+     * @return array{
+     *     external_id: string,
+     *     author_name: string|null,
+     *     rating: int|null,
+     *     text: string|null,
+     *     published_at: string|null,
+     *     organization_reply: string|null,
+     *     organization_reply_at: string|null
+     * }|null
+     */
+    private function normalizeReview(mixed $review): ?array
+    {
+        if (! is_array($review)) {
+            return null;
+        }
+
+        $externalId = $this->stringValue($review['reviewId']);
+
+        if ($externalId === null) {
+            return null;
+        }
+
+        return [
+            'external_id' => $externalId,
+            'author_name' => $this->stringValue($review['author']['name'] ?? null),
+            'rating' => $this->intValue($review['rating']),
+            'text' => $this->stringValue($review['text']),
+            'published_at' => $this->stringValue($review['updatedTime']),
+            'organization_reply' => $this->stringValue($review['businessComment']['text'] ?? null),
+            'organization_reply_at' => $this->stringValue($review['businessComment']['updatedTime'] ?? null),
+        ];
+    }
 }
