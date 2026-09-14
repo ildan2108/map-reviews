@@ -13,8 +13,11 @@ class YandexMapsParser
     public function parse(string $url): array
     {
         $organizationId = $this->extractOrganizationId($url);
+
         if ($organizationId === null) {
-            throw new YandexMapsSourceException('Не удалось определить идентификатор организации в ссылке Яндекс.Карт.');
+            throw new YandexMapsSourceException(
+                'Не удалось определить идентификатор организации в ссылке Яндекс.Карт.'
+            );
         }
 
         $response = Http::withHeaders([
@@ -31,11 +34,23 @@ class YandexMapsParser
         }
 
         $html = $response->body();
+
         if (trim($html) === '') {
             throw new YandexMapsSourceException('Яндекс.Карты вернули пустой ответ.');
         }
 
+        $state = $this->extractState($html);
+
+        if ($state !== null) {
+            $data = $this->extractOrganizationData($state);
+
+            if ($data !== null) {
+                return $data;
+            }
+        }
+
         $data = $this->extractJsonLd($html);
+
         if ($data !== null) {
             $name = $this->stringValue($data['name'] ?? null);
             $rating = $data['aggregateRating'] ?? null;
@@ -54,14 +69,17 @@ class YandexMapsParser
             '/"name"\s*:\s*"((?:\\.|[^"\\])+)"/u',
             '/<title[^>]*>(.*?)<\/title>/isu',
         ]);
+
         $rating = $this->match($html, [
             '/"ratingValue"\s*:\s*"?([0-9]+(?:[.,][0-9]+)?)"?/u',
         ]);
+
         $ratingsCount = $this->match($html, [
-            '/"ratingCount"\s*:\s*"?(\d+)"?/u',
+            '/"ratingCount"\s*:\s*"?(\\d+)"?/u',
         ]);
+
         $reviewsCount = $this->match($html, [
-            '/"reviewCount"\s*:\s*"?(\d+)"?/u',
+            '/"reviewCount"\s*:\s*"?(\\d+)"?/u',
         ]);
 
         if ($name === null || $name === '') {
@@ -87,15 +105,52 @@ class YandexMapsParser
             : null;
     }
 
+    /**
+     * @return array{
+     *     name: string,
+     *     average_rating: float|null,
+     *     ratings_count: int|null,
+     *     reviews_count: int|null
+     * }|null
+     */
+    private function extractOrganizationData(array $state): ?array
+    {
+        $item = $state['stack'][0]['results']['items'][0] ?? null;
+
+        if (! is_array($item)) {
+            return null;
+        }
+
+        $name = $this->stringValue($item['title'] ?? null);
+
+        if ($name === null) {
+            return null;
+        }
+
+        $rating = $item['ratingData'] ?? [];
+
+        return [
+            'name' => $name,
+            'average_rating' => $this->floatValue($rating['ratingValue'] ?? null),
+            'ratings_count' => $this->intValue($rating['ratingCount'] ?? null),
+            'reviews_count' => $this->intValue($rating['reviewCount'] ?? null),
+        ];
+    }
+
     /** @return array<string, mixed>|null */
     private function extractJsonLd(string $html): ?array
     {
-        if (! preg_match_all('/<script[^>]+type=["\']application\/ld\+json["\'][^>]*>(.*?)<\/script>/isu', $html, $matches)) {
+        if (! preg_match_all(
+            '/<script[^>]+type=["\']application\/ld\+json["\'][^>]*>(.*?)<\/script>/isu',
+            $html,
+            $matches
+        )) {
             return null;
         }
 
         foreach ($matches[1] as $json) {
             $decoded = json_decode(trim($json), true);
+
             if (! is_array($decoded)) {
                 continue;
             }
@@ -194,7 +249,7 @@ class YandexMapsParser
             );
         }
 
-        $reviews = $state['reviewResults']['reviews'] ?? null;
+        $reviews = $state['stack'][0]['results']['items'][0]['reviewResults']['reviews'] ?? null;
 
         if (! is_array($reviews)) {
             throw new YandexMapsSourceException(
