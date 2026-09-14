@@ -1,26 +1,66 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import api from '../services/api';
 
 const router = useRouter();
+const organization = ref(null);
 const yandexUrl = ref('');
 const error = ref('');
 const success = ref('');
 const isLoading = ref(true);
 const isSaving = ref(false);
 const isLoggingOut = ref(false);
+let pollingTimer = null;
 
 onMounted(async () => {
+    await loadOrganization();
+});
+
+onBeforeUnmount(() => {
+    stopPolling();
+});
+
+async function loadOrganization() {
     try {
         const response = await api.get('/api/organization');
+        organization.value = response.data.data;
         yandexUrl.value = response.data.data?.yandex_url ?? '';
+        syncPolling();
     } catch (requestError) {
         error.value = 'Не удалось загрузить настройки организации.';
     } finally {
         isLoading.value = false;
     }
-});
+}
+
+async function refreshOrganization() {
+    try {
+        const response = await api.get('/api/organization');
+        organization.value = response.data.data;
+        syncPolling();
+    } catch (requestError) {
+        stopPolling();
+    }
+}
+
+function syncPolling() {
+    if (['pending', 'processing'].includes(organization.value?.parsing_status)) {
+        if (pollingTimer === null) {
+            pollingTimer = window.setInterval(refreshOrganization, 3000);
+        }
+        return;
+    }
+
+    stopPolling();
+}
+
+function stopPolling() {
+    if (pollingTimer !== null) {
+        window.clearInterval(pollingTimer);
+        pollingTimer = null;
+    }
+}
 
 async function saveOrganization() {
     error.value = '';
@@ -32,8 +72,10 @@ async function saveOrganization() {
             yandex_url: yandexUrl.value,
         });
 
+        organization.value = response.data.data;
         yandexUrl.value = response.data.data.yandex_url;
-        success.value = 'Ссылка сохранена.';
+        success.value = 'Ссылка сохранена. Данные организации загружаются.';
+        syncPolling();
     } catch (requestError) {
         error.value = requestError.response?.data?.errors?.yandex_url?.[0]
             ?? 'Не удалось сохранить ссылку.';
@@ -86,6 +128,25 @@ async function logout() {
                     :disabled="isLoading || isSaving"
                     required
                 >
+
+                <div v-if="organization?.parsing_status === 'pending' || organization?.parsing_status === 'processing'" class="mt-4 rounded-md bg-blue-50 p-3 text-sm text-blue-700" role="status">
+                    Данные обновляются…
+                </div>
+                <div v-else-if="organization?.parsing_status === 'completed'" class="mt-4 rounded-md bg-green-50 p-3 text-sm text-green-700" role="status">
+                    Данные загружены.
+                </div>
+                <div v-else-if="organization?.parsing_status === 'failed'" class="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">
+                    {{ organization.parsing_error || 'Не удалось загрузить данные организации.' }}
+                </div>
+
+                <div v-if="organization?.name" class="mt-5 rounded-md border border-slate-200 p-4">
+                    <div class="font-medium text-slate-900">{{ organization.name }}</div>
+                    <div class="mt-2 flex flex-wrap gap-4 text-sm text-slate-600">
+                        <span v-if="organization.average_rating !== null">Рейтинг: {{ organization.average_rating }}</span>
+                        <span v-if="organization.ratings_count !== null">Оценок: {{ organization.ratings_count }}</span>
+                        <span v-if="organization.reviews_count !== null">Отзывов: {{ organization.reviews_count }}</span>
+                    </div>
+                </div>
 
                 <p v-if="error" class="mt-3 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">
                     {{ error }}
