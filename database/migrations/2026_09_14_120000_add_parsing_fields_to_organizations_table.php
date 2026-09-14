@@ -9,7 +9,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('organizations', function (Blueprint $table): void {
-            $table->string('parsing_status', 20)->default('pending')->index();
+            $table->enum('parsing_status', ['pending', 'processing', 'completed', 'failed'])
+                ->default('pending')
+                ->index();
             $table->text('parsing_error')->nullable();
             $table->timestamp('parsing_started_at')->nullable();
             $table->timestamp('parsed_at')->nullable();
