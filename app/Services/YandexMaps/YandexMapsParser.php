@@ -3,9 +3,7 @@
 namespace App\Services\YandexMaps;
 
 use App\Exceptions\YandexMapsSourceException;
-use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Str;
 
 class YandexMapsParser
 {
@@ -14,6 +12,11 @@ class YandexMapsParser
      */
     public function parse(string $url): array
     {
+        $organizationId = $this->extractOrganizationId($url);
+        if ($organizationId === null) {
+            throw new YandexMapsSourceException('Не удалось определить идентификатор организации в ссылке Яндекс.Карт.');
+        }
+
         $response = Http::acceptHtml()
             ->timeout(20)
             ->retry(2, 500)
@@ -71,6 +74,15 @@ class YandexMapsParser
             'ratings_count' => $this->intValue($ratingsCount),
             'reviews_count' => $this->intValue($reviewsCount),
         ];
+    }
+
+    private function extractOrganizationId(string $url): ?string
+    {
+        $path = parse_url($url, PHP_URL_PATH) ?? '';
+
+        return preg_match('~/org/[^/]+/(\d+)~', $path, $matches) === 1
+            ? $matches[1]
+            : null;
     }
 
     /** @return array<string, mixed>|null */
