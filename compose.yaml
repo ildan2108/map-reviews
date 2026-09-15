@@ -7,6 +7,8 @@ services:
     depends_on:
       database:
         condition: service_healthy
+      frontend:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     volumes:
@@ -22,6 +24,15 @@ services:
     depends_on:
       database:
         condition: service_healthy
+
+  frontend:
+      build:
+          context: .
+          dockerfile: docker/node/Dockerfile
+      command: npm run build
+      volumes:
+          - .:/var/www/html
+          - node_modules:/var/www/html/node_modules
 
   database:
     image: postgres:16
@@ -39,3 +50,4 @@ services:
 
 volumes:
   database_data:
+  node_modules:

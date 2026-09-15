@@ -1,6 +1,7 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import ReviewsList from '../components/ReviewsList.vue';
 import api from '../services/api';
 
 const router = useRouter();
@@ -163,6 +164,11 @@ async function logout() {
                     {{ isSaving ? 'Сохраняем…' : 'Сохранить' }}
                 </button>
             </form>
+
+            <ReviewsList
+                v-if="organization?.parsing_status === 'completed'"
+                :key="organization.parsed_at"
+            />
         </div>
     </main>
 </template>

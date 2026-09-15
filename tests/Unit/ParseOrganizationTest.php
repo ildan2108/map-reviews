@@ -5,7 +5,9 @@ namespace Tests\Unit;
 use App\Exceptions\YandexMapsSourceException;
 use App\Jobs\ParseOrganization;
 use App\Models\Organization;
+use App\Models\Review;
 use App\Services\YandexMaps\YandexMapsParser;
+use App\Services\YandexMaps\YandexMapsUrlResolver;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Tests\TestCase;
 
@@ -16,12 +18,13 @@ class ParseOrganizationTest extends TestCase
     public function test_successful_parsing_updates_organization_and_saves_reviews(): void
     {
         $organization = Organization::factory()->create(['parsing_status' => 'pending']);
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
 
         $parser = $this->mock(YandexMapsParser::class);
 
         $parser->shouldReceive('parse')
             ->once()
-            ->with($organization->yandex_url)
+            ->with($resolvedUrl)
             ->andReturn([
                 'name' => 'Coffee Shop',
                 'average_rating' => 4.7,
@@ -31,7 +34,7 @@ class ParseOrganizationTest extends TestCase
 
         $parser->shouldReceive('parseReviews')
             ->once()
-            ->with($organization->yandex_url, 1)
+            ->with($resolvedUrl, 1)
             ->andReturn([
                 [
                     'external_id' => 'review-1',
@@ -54,7 +57,15 @@ class ParseOrganizationTest extends TestCase
             ]);
 
         $job = new ParseOrganization($organization);
-        $job->handle($parser);
+
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
 
         $organization->refresh();
 
@@ -87,6 +98,7 @@ class ParseOrganizationTest extends TestCase
             'organization_reply' => null,
         ]);
     }
+
     public function test_source_error_marks_organization_as_failed_with_readable_message(): void
     {
         $organization = Organization::factory()->create(['parsing_status' => 'processing']);
@@ -100,15 +112,17 @@ class ParseOrganizationTest extends TestCase
         $this->assertSame('failed', $organization->parsing_status);
         $this->assertSame($exception->getMessage(), $organization->parsing_error);
     }
+
     public function test_successful_parsing_processes_multiple_review_pages(): void
     {
         $organization = Organization::factory()->create(['parsing_status' => 'pending']);
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
 
         $parser = $this->mock(YandexMapsParser::class);
 
         $parser->shouldReceive('parse')
             ->once()
-            ->with($organization->yandex_url)
+            ->with($resolvedUrl)
             ->andReturn([
                 'name' => 'Coffee Shop',
                 'average_rating' => 4.7,
@@ -132,12 +146,12 @@ class ParseOrganizationTest extends TestCase
 
         $parser->shouldReceive('parseReviews')
             ->once()
-            ->with($organization->yandex_url, 1)
+            ->with($resolvedUrl, 1)
             ->andReturn($firstPageReviews);
 
         $parser->shouldReceive('parseReviews')
             ->once()
-            ->with($organization->yandex_url, 2)
+            ->with($resolvedUrl, 2)
             ->andReturn([
                 [
                     'external_id' => 'review-51',
@@ -151,7 +165,15 @@ class ParseOrganizationTest extends TestCase
             ]);
 
         $job = new ParseOrganization($organization);
-        $job->handle($parser);
+
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
 
         $this->assertDatabaseCount('reviews', 51);
 
@@ -171,11 +193,14 @@ class ParseOrganizationTest extends TestCase
 
         $this->assertSame('completed', $organization->parsing_status);
     }
+
     public function test_repeated_parsing_does_not_create_duplicate_reviews(): void
     {
         $organization = Organization::factory()->create([
             'parsing_status' => 'pending',
         ]);
+
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
 
         $review = [
             'external_id' => 'review-1',
@@ -191,7 +216,7 @@ class ParseOrganizationTest extends TestCase
 
         $parser->shouldReceive('parse')
             ->twice()
-            ->with($organization->yandex_url)
+            ->with($resolvedUrl)
             ->andReturn([
                 'name' => 'Coffee Shop',
                 'average_rating' => 4.7,
@@ -201,13 +226,28 @@ class ParseOrganizationTest extends TestCase
 
         $parser->shouldReceive('parseReviews')
             ->twice()
-            ->with($organization->yandex_url, 1)
+            ->with($resolvedUrl, 1)
             ->andReturn([$review]);
 
         $job = new ParseOrganization($organization);
 
-        $job->handle($parser);
-        $job->handle($parser);
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
+
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
 
         $this->assertDatabaseCount('reviews', 1);
 
@@ -215,6 +255,195 @@ class ParseOrganizationTest extends TestCase
             'organization_id' => $organization->id,
             'external_id' => 'review-1',
             'author_name' => 'Ivan Ivanov',
+        ]);
+    }
+
+    public function test_successful_reparsing_replaces_old_reviews(): void
+    {
+        $organization = Organization::factory()->create([
+            'parsing_status' => 'pending',
+        ]);
+
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
+
+        Review::factory()->create([
+            'organization_id' => $organization->id,
+            'external_id' => 'old-review',
+            'author_name' => 'Old Author',
+        ]);
+
+        $parser = $this->mock(YandexMapsParser::class);
+
+        $parser->shouldReceive('parse')
+            ->once()
+            ->with($resolvedUrl)
+            ->andReturn([
+                'name' => 'New Organization',
+                'average_rating' => 4.8,
+                'ratings_count' => 100,
+                'reviews_count' => 1,
+            ]);
+
+        $parser->shouldReceive('parseReviews')
+            ->once()
+            ->with($resolvedUrl, 1)
+            ->andReturn([
+                [
+                    'external_id' => 'new-review',
+                    'author_name' => 'New Author',
+                    'rating' => 5,
+                    'text' => 'Новый отзыв',
+                    'published_at' => '2026-09-10T10:00:00Z',
+                    'organization_reply' => null,
+                    'organization_reply_at' => null,
+                ],
+            ]);
+
+        $job = new ParseOrganization($organization);
+
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
+
+        $this->assertDatabaseMissing('reviews', [
+            'organization_id' => $organization->id,
+            'external_id' => 'old-review',
+        ]);
+
+        $this->assertDatabaseHas('reviews', [
+            'organization_id' => $organization->id,
+            'external_id' => 'new-review',
+            'author_name' => 'New Author',
+        ]);
+
+        $this->assertDatabaseCount('reviews', 1);
+    }
+
+    public function test_failed_reparsing_keeps_existing_reviews(): void
+    {
+        $organization = Organization::factory()->create([
+            'parsing_status' => 'pending',
+        ]);
+
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
+
+        Review::factory()->create([
+            'organization_id' => $organization->id,
+            'external_id' => 'old-review',
+            'author_name' => 'Old Author',
+        ]);
+
+        $parser = $this->mock(YandexMapsParser::class);
+
+        $parser->shouldReceive('parse')
+            ->once()
+            ->with($resolvedUrl)
+            ->andReturn([
+                'name' => 'New Organization',
+                'average_rating' => 4.8,
+                'ratings_count' => 100,
+                'reviews_count' => 1,
+            ]);
+
+        $parser->shouldReceive('parseReviews')
+            ->once()
+            ->with($resolvedUrl, 1)
+            ->andThrow(
+                new YandexMapsSourceException(
+                    'Не удалось получить отзывы Яндекс.Карт.'
+                )
+            );
+
+        $job = new ParseOrganization($organization);
+
+        $this->expectException(YandexMapsSourceException::class);
+
+        try {
+            $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+            $urlResolver->shouldReceive('resolve')
+                ->once()
+                ->with($organization->yandex_url)
+                ->andReturn($resolvedUrl);
+
+            $job->handle($parser, $urlResolver);
+        } finally {
+            $this->assertDatabaseHas('reviews', [
+                'organization_id' => $organization->id,
+                'external_id' => 'old-review',
+                'author_name' => 'Old Author',
+            ]);
+        }
+    }
+
+    public function test_reparsing_updates_existing_review(): void
+    {
+        $organization = Organization::factory()->create([
+            'parsing_status' => 'pending',
+        ]);
+
+        $resolvedUrl = 'https://yandex.ru/maps/org/coffee_shop/123456789/';
+
+        Review::factory()->create([
+            'organization_id' => $organization->id,
+            'external_id' => 'review-1',
+            'author_name' => 'Ivan Ivanov',
+            'rating' => 4,
+            'text' => 'Старый текст',
+        ]);
+
+        $parser = $this->mock(YandexMapsParser::class);
+
+        $parser->shouldReceive('parse')
+            ->once()
+            ->with($resolvedUrl)
+            ->andReturn([
+                'name' => 'Coffee Shop',
+                'average_rating' => 5.0,
+                'ratings_count' => 123,
+                'reviews_count' => 1,
+            ]);
+
+        $parser->shouldReceive('parseReviews')
+            ->once()
+            ->with($resolvedUrl, 1)
+            ->andReturn([
+                [
+                    'external_id' => 'review-1',
+                    'author_name' => 'Ivan Ivanov',
+                    'rating' => 5,
+                    'text' => 'Обновлённый текст',
+                    'published_at' => '2026-09-10T10:00:00Z',
+                    'organization_reply' => 'Спасибо!',
+                    'organization_reply_at' => '2026-09-10T11:00:00Z',
+                ],
+            ]);
+
+        $job = new ParseOrganization($organization);
+
+        $urlResolver = $this->mock(YandexMapsUrlResolver::class);
+
+        $urlResolver->shouldReceive('resolve')
+            ->once()
+            ->with($organization->yandex_url)
+            ->andReturn($resolvedUrl);
+
+        $job->handle($parser, $urlResolver);
+
+        $this->assertDatabaseCount('reviews', 1);
+
+        $this->assertDatabaseHas('reviews', [
+            'organization_id' => $organization->id,
+            'external_id' => 'review-1',
+            'author_name' => 'Ivan Ivanov',
+            'rating' => 5,
+            'text' => 'Обновлённый текст',
+            'organization_reply' => 'Спасибо!',
         ]);
     }
 }

@@ -115,28 +115,42 @@ class YandexMapsParser
      */
     private function extractOrganizationData(array $state): ?array
     {
-        $item = $state['stack'][0]['results']['items'][0] ?? null;
+        $items = $state['stack'][0]['results']['items'] ?? [];
 
-        if (! is_array($item)) {
+        if (! is_array($items)) {
             return null;
         }
 
-        $name = $this->stringValue($item['title'] ?? null);
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
 
-        if ($name === null) {
-            return null;
+            $name = $this->stringValue($item['title'] ?? null);
+            $rating = $item['ratingData'] ?? null;
+
+            if ($name === null || ! is_array($rating)) {
+                continue;
+            }
+
+            if (
+                ! array_key_exists('ratingValue', $rating)
+                && ! array_key_exists('ratingCount', $rating)
+                && ! array_key_exists('reviewCount', $rating)
+            ) {
+                continue;
+            }
+
+            return [
+                'name' => $name,
+                'average_rating' => $this->floatValue($rating['ratingValue'] ?? null),
+                'ratings_count' => $this->intValue($rating['ratingCount'] ?? null),
+                'reviews_count' => $this->intValue($rating['reviewCount'] ?? null),
+            ];
         }
 
-        $rating = $item['ratingData'] ?? [];
-
-        return [
-            'name' => $name,
-            'average_rating' => $this->floatValue($rating['ratingValue'] ?? null),
-            'ratings_count' => $this->intValue($rating['ratingCount'] ?? null),
-            'reviews_count' => $this->intValue($rating['reviewCount'] ?? null),
-        ];
+        return null;
     }
-
     /** @return array<string, mixed>|null */
     private function extractJsonLd(string $html): ?array
     {
@@ -249,9 +263,13 @@ class YandexMapsParser
             );
         }
 
-        $reviews = $state['stack'][0]['results']['items'][0]['reviewResults']['reviews'] ?? null;
+        $reviews = $this->findReviews($state);
 
-        if (! is_array($reviews)) {
+        if ($reviews === null) {
+            if ($page > 1) {
+                return [];
+            }
+
             throw new YandexMapsSourceException(
                 'Не удалось найти отзывы в ответе Яндекс.Карт.'
             );
@@ -272,9 +290,19 @@ class YandexMapsParser
 
     private function buildReviewsUrl(string $url, int $page): string
     {
-        $separator = str_contains($url, '?') ? '&' : '?';
+        $parts = parse_url($url);
 
-        return $url . $separator . 'page=' . $page;
+        $scheme = $parts['scheme'] ?? 'https';
+        $host = $parts['host'] ?? '';
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+
+        $path = rtrim($parts['path'] ?? '', '/');
+
+        if (! str_ends_with($path, '/reviews')) {
+            $path .= '/reviews';
+        }
+
+        return "{$scheme}://{$host}{$port}{$path}/?page={$page}";
     }
 
     /**
@@ -293,6 +321,70 @@ class YandexMapsParser
         $state = json_decode(trim($matches[1]), true);
 
         return is_array($state) ? $state : null;
+    }
+
+    /**
+     * @return array<int, mixed>|null
+     */
+    private function findReviews(array $state): ?array
+    {
+        $collections = [];
+
+        $this->collectReviewCollections($state, $collections);
+
+        if ($collections !== []) {
+            usort(
+                $collections,
+                fn (array $first, array $second): int => count($second) <=> count($first)
+            );
+
+            return $collections[0];
+        }
+
+        $fallback = $state['stack'][0]['results']['items'][0]['reviewResults']['reviews'] ?? null;
+
+        return is_array($fallback) ? $fallback : null;
+    }
+    /**
+     * @param array<int, array<int, mixed>> $collections
+     */
+    private function collectReviewCollections(
+        mixed $data,
+        array &$collections
+    ): void {
+        if (! is_array($data)) {
+            return;
+        }
+
+        if ($this->looksLikeReviewCollection($data)) {
+            $collections[] = $data;
+        }
+
+        foreach ($data as $value) {
+            $this->collectReviewCollections($value, $collections);
+        }
+    }
+
+    /**
+     * @param array<int, mixed> $collection
+     */
+    private function looksLikeReviewCollection(array $collection): bool
+    {
+        if ($collection === []) {
+            return false;
+        }
+
+        foreach ($collection as $item) {
+            if (
+                is_array($item)
+                && isset($item['reviewId'])
+                && is_string($item['reviewId'])
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
